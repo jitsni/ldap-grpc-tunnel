@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package org.jitu.ldap.grpc;
+
+message Session {
+  // The tag associated with the initial TCP stream setup.
+  int32 tag = 1;
+
+  // Target identifies which handler to use for a tunnel stream.
+  string target = 2;
+
+  // Error allows the register stream to return an error without breaking the
+  // stream.
+  string error = 3;
+}
+
+message Data {
+  int32 tag = 1;   // Tag associated with the initial TCP stream setup.
+  bytes data = 2;  // Bytes received from client connection.
+  bool close = 3;  // Connection has reached EOF.
+}
+
+// Tunnel allows LDAP over gRPC proxy
+service Tunnel {
+  // Register is used to request new Tunnel RPC invocations.
+  rpc Register(Session) returns (stream Session);
+
+  // Tunnel allows the tunnel client and server to create a bidirectional stream
+  // in which data can be forwarded.
+  rpc Tunnel(stream Data) returns (stream Data);
+}
