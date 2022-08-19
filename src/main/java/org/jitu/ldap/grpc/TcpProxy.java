@@ -21,55 +21,72 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
-import java.util.Arrays;
-import java.util.function.Consumer;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /*
  * @author Jitendra Kotamraju
  */
-public class TcpProxy implements Closeable {
+class TcpProxy implements Closeable {
     private static final Logger LOGGER = Logger.getLogger(TcpProxy.class.getName());
+    private static final String TCP_PROXY = "TcpProxy";
+    private static final String LDAP = "LdapServer";
+    private static final AtomicInteger THREAD_NUMBER = new AtomicInteger(1);
 
-    private final String ip;
+    private final String host;
     private final int port;
     private final int session;
-    private Consumer<byte[]> readConsumer;
+    private LdapServerReadHandler readHandler;
 
-    Socket clientSocket;
-    InputStream in;
-    OutputStream out;
+    private Socket socket;
+    private InputStream in;
+    private OutputStream out;
+    private volatile boolean closed;
 
-    TcpProxy(int session, String ip, int port) {
+    TcpProxy(int session, String host, int port) {
         this.session = session;
-        this.ip = ip;
+        this.host = host;
         this.port = port;
     }
 
-    void setReadConsumer(Consumer<byte[]> readConsumer) {
-        this.readConsumer = readConsumer;
+    void setReadHandler(LdapServerReadHandler readHandler) {
+        this.readHandler = readHandler;
     }
 
-    public void startConnection() throws IOException {
-        clientSocket = new Socket(ip, port);
-        LOGGER.info(String.format("TcpProxy: socket = %s", clientSocket));
+    void startConnection() throws IOException {
+        socket = new Socket(host, port);
+        LOGGER.info(String.format("session = %d socket = %s", session, socket));
 
-        out = clientSocket.getOutputStream();
-        LOGGER.info(String.format("TcpProxy: session = %d output stream = %s", session, out));
+        out = socket.getOutputStream();
+        LOGGER.info(String.format("session = %d output stream = %s", session, out));
 
-        in = clientSocket.getInputStream();
-        LOGGER.info(String.format("TcpProxy: session = %d input stream = %s", session, in));
+        in = socket.getInputStream();
+        LOGGER.info(String.format("session = %d input stream = %s", session, in));
 
-        Reader reader = new Reader();
-        new Thread(reader, "reader").start();
+        LdapServerReader reader = new LdapServerReader();
+        String name = "tcp-proxy-" + THREAD_NUMBER.getAndIncrement();
+        Thread thread = new Thread(reader, name);
+        thread.setDaemon(true);
+        thread.start();
     }
 
     @Override
-    public void close() throws IOException {
-        clientSocket.close();
+    public void close() {
+        if (!closed) {
+            closed = true;
+            try {
+                if (socket != null) {
+                    LOGGER.info(String.format("%s socket close: session = %d", TCP_PROXY, session));
+                    socket.close();
+                }
+            } catch (IOException ioe) {
+                // ignore
+            }
+        }
     }
 
-    class Reader implements Runnable {
+    private class LdapServerReader implements Runnable {
 
         public void run() {
             try {
@@ -77,24 +94,32 @@ public class TcpProxy implements Closeable {
 
                 while (true) {
                     int len = in.read(b);
-                    LOGGER.info(String.format("TcpProxy: session = %d read() = %d bytes", session, len));
+                    LOGGER.info(String.format("%s <-- %s: session = %d read = %d bytes", TCP_PROXY, LDAP, session, len));
                     if (len == -1) {
+                        readHandler.handle(b, 0, len, true, null);
                         break;
                     }
-                    byte[] copy = Arrays.copyOf(b, len);
-
-                    readConsumer.accept(copy);
+                    readHandler.handle(b, 0, len, false, null);
                 }
             } catch (Exception e) {
-                e.printStackTrace();
+                if (!closed) {
+                    LOGGER.log(Level.INFO, "Error reading ldap server", e);
+                    readHandler.handle(null, 0, 0, false, e);
+                }
+            } finally {
+                close();
             }
         }
 
     }
 
     void write(byte[] data) throws Exception {
-        LOGGER.info(String.format("TcpProxy:session = %d write() = %d bytes\n", session, data.length));
+        LOGGER.info(String.format("%s --> %s: session = %d write = %d bytes\n", TCP_PROXY, LDAP, session, data.length));
         out.write(data);
+    }
+
+    interface LdapServerReadHandler {
+        void handle(byte[] bytes, int off, int len, boolean close, Exception ex);
     }
 
 }

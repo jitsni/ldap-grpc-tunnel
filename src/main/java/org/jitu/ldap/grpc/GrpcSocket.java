@@ -32,20 +32,22 @@ import java.util.logging.Logger;
  */
 public class GrpcSocket extends Socket {
     private static final Logger LOGGER = Logger.getLogger(GrpcSocket.class.getName());
+    private static final String GRPC_SOCKET = "GrpcSocket";
 
     private static final AtomicInteger sessionId = new AtomicInteger(1);
 
-    private final Consumer<byte[]> writeConsumer;
+    private final LdapProxyGrpcServer.TunnelWriteHandler writeHandler;
     private final LdapProxyGrpcServer.MyStream myStream;
 
     private int session;
     private MyInputStream in;
     private OutputStream out;
+    private boolean closed;
 
     GrpcSocket(String host, int port, LdapProxyGrpcServer ldapProxyGrpcServer) {
         this.session = sessionId.getAndIncrement();
         this.myStream = ldapProxyGrpcServer.grpcServer.getStream(host, port, session);
-        this.writeConsumer = myStream.writeConsumer();
+        this.writeHandler = myStream.writeConsumer();
         in = new MyInputStream();
         myStream.setReadConsumer(in);
     }
@@ -65,7 +67,27 @@ public class GrpcSocket extends Socket {
 
     @Override
     public void close() {
-        LOGGER.info(String.format("session = %d close()", session));
+        LOGGER.info(String.format("%s session = %d close()", GRPC_SOCKET, session));
+        if (!closed) {
+            closed = true;
+
+            writeHandler.close();
+
+            if (out != null) {
+                try {
+                    out.close();
+                } catch (Exception e) {
+                    // ignore
+                }
+            }
+            if (in != null) {
+                try {
+                    in.close();
+                } catch (Exception e) {
+                    // ignore
+                }
+            }
+        }
     }
 
     @Override
@@ -85,7 +107,7 @@ public class GrpcSocket extends Socket {
             byte[] copy = new byte[1];
             copy[0] = (byte) b;
 
-            writeConsumer.accept(copy);
+            writeHandler.write(copy);
         }
 
         @Override
@@ -95,7 +117,7 @@ public class GrpcSocket extends Socket {
             byte[] copy = new byte[b.length];
             System.arraycopy(b, 0, copy, 0, b.length);
 
-            writeConsumer.accept(copy);
+            writeHandler.write(copy);
         }
 
         @Override
@@ -105,7 +127,7 @@ public class GrpcSocket extends Socket {
             byte[] copy = new byte[len];
             System.arraycopy(b, off, copy, 0, len);
 
-            writeConsumer.accept(copy);
+            writeHandler.write(copy);
         }
 
         @Override

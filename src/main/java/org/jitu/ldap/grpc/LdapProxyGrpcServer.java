@@ -23,6 +23,7 @@ import io.grpc.stub.StreamObserver;
 import org.jitu.ldap.grpc.LdapService.Data;
 import org.jitu.ldap.grpc.LdapService.Session;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -35,6 +36,8 @@ import java.util.logging.Logger;
  */
 public class LdapProxyGrpcServer {
     private static final Logger LOGGER = Logger.getLogger(LdapProxyGrpcServer.class.getName());
+    private static final String LDAP_GRPC_SERVER = "LdapGrpcServer";
+    private static final String LDAP_GRPC_CLIENT = "LdapGrpcClient";
 
     volatile GrpcServerImpl grpcServer;
     private Server server;
@@ -44,7 +47,7 @@ public class LdapProxyGrpcServer {
         LdapProxyGrpcServerRegistry.getInstance().addTunnelEndpoint(this);
 
         /* The port on which the server should run */
-        int port = 50051;
+        int port = 50052;
         server = ServerBuilder.forPort(port)
                 .addService(grpcServer)
                 .build()
@@ -84,45 +87,45 @@ public class LdapProxyGrpcServer {
         }
     }
 
-    static class MyStream {
-        private Map<Integer, CompletableFuture<MyStream>> streamMap;
-        final Consumer<byte[]> writeConsumer;
+    static class MyStream implements Closeable {
+        private final
+        Map<Integer, CompletableFuture<MyStream>> streamMap;
+        final TunnelWriteHandler writeHandler;
         Consumer<byte[]> readConsumer;
+        StreamObserver<Data> responseObserver;
         int sessionId;
 
         MyStream(Map<Integer, CompletableFuture<MyStream>> streamMap, StreamObserver<Data> responseObserver) {
             this.streamMap = streamMap;
+            this.responseObserver = responseObserver;
 
-            writeConsumer = bytes -> {
-                Data data = Data.newBuilder().setTag(sessionId).setData(ByteString.copyFrom(bytes)).build();
-                responseObserver.onNext(data);
-            };
+            writeHandler = new TunnelWriteHandler(sessionId, responseObserver);
         }
 
         void setReadConsumer(Consumer<byte[]> readConsumer) {
             this.readConsumer = readConsumer;
         }
 
-        Consumer<byte[]> writeConsumer() {
-            return writeConsumer;
+        TunnelWriteHandler writeConsumer() {
+            return writeHandler;
         }
 
         StreamObserver<Data> getRquestObserver() {
             return new StreamObserver<Data>() {
                 @Override
                 public void onNext(Data value) {
-                    LOGGER.info(String.format("LdapProxyGrpcServer <-- session = %d  %d bytes ", value.getTag(), value.getData().size()));
+                    LOGGER.info(String.format("%s <-- %s session = %d  read = %d bytes", LDAP_GRPC_SERVER, LDAP_GRPC_CLIENT, value.getTag(), value.getData().size()));
                     sessionId = value.getTag();
                     CompletableFuture<MyStream> myStream = streamMap.get(sessionId);
                     if (myStream == null) {
-                        throw new RuntimeException(String.format("LdapProxyGrpcServer <-- unknown stream %d", sessionId));
+                        throw new RuntimeException(String.format("%s <-- %s unknown session = %d", LDAP_GRPC_SERVER, LDAP_GRPC_CLIENT, sessionId));
                     }
                     if (!myStream.isDone()) {
                         myStream.complete(MyStream.this);
                     }
                     byte[] data = value.getData().toByteArray();
                     if (readConsumer == null) {
-                        LOGGER.info("readConsumer is null");
+                        LOGGER.info(String.format("%s <-- %s session = %d readConsumer is null", LDAP_GRPC_SERVER, LDAP_GRPC_CLIENT, sessionId));
                     } else {
                         readConsumer.accept(data);
                     }
@@ -135,10 +138,45 @@ public class LdapProxyGrpcServer {
 
                 @Override
                 public void onCompleted() {
-                    LOGGER.info("All Done");
+                    LOGGER.info(String.format("%s <-- %s session = %d onCompleted", LDAP_GRPC_SERVER, LDAP_GRPC_CLIENT, sessionId));
                 }
             };
         }
 
+        @Override
+        public void close() {
+            LOGGER.info(String.format("%s --> %s session = %d onCompleted", LDAP_GRPC_SERVER, LDAP_GRPC_CLIENT, sessionId));
+            responseObserver.onCompleted();
+        }
     }
+
+    // gRPC Server --> gRPC Client write handler
+    static class TunnelWriteHandler implements Closeable {
+        final int sessionId;
+        final StreamObserver<Data> responseObserver;
+
+        TunnelWriteHandler(int sessionId, StreamObserver<Data> responseObserver) {
+            this.sessionId = sessionId;
+            this.responseObserver = responseObserver;
+        }
+
+        public void write(byte[] bytes) {
+            Data data = Data.newBuilder()
+                    .setTag(sessionId)
+                    .setData(ByteString.copyFrom(bytes))
+                    .build();
+            LOGGER.info(String.format("%s --> %s session = %d  write = %d bytes",
+                    LDAP_GRPC_SERVER, LDAP_GRPC_CLIENT, sessionId, bytes.length));
+
+            responseObserver.onNext(data);
+        }
+
+        @Override
+        public void close() {
+            LOGGER.info(String.format("%s --> %s session = %d onCompleted",
+                    LDAP_GRPC_SERVER, LDAP_GRPC_CLIENT, sessionId));
+            responseObserver.onCompleted();
+        }
+    }
+
 }
