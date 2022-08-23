@@ -45,16 +45,23 @@ public class LdapProxyGrpcClient {
                 .usePlaintext()
                 .build();
         TunnelGrpc.TunnelStub stub  = TunnelGrpc.newStub(channel);
-        StreamObserver<LdapService.Session> responseObserver = new RegistrationHandler(stub);
-        stub.register(LdapService.Session.newBuilder().build(), responseObserver);
+        RegistrationHandler registrationHandler = new RegistrationHandler(stub);
+        StreamObserver<LdapService.Session> requestObserver = stub.register(registrationHandler);
+        registrationHandler.setRequestObserver(requestObserver);
     }
 
     private class RegistrationHandler implements StreamObserver<LdapService.Session> {
 
         private final TunnelGrpc.TunnelStub stub;
+        StreamObserver<LdapService.Session> requestObserver;
 
         RegistrationHandler(TunnelGrpc.TunnelStub stub) {
             this.stub = stub;
+        }
+
+        void setRequestObserver(StreamObserver<LdapService.Session> requestObserver) {
+            this.requestObserver = requestObserver;
+            requestObserver.onNext(LdapService.Session.newBuilder().build());
         }
 
         @Override
@@ -75,6 +82,7 @@ public class LdapProxyGrpcClient {
                 tunnel(stub, sessionId, tcpProxy);
             } catch (Exception e) {
                 e.printStackTrace();
+                requestObserver.onNext(LdapService.Session.newBuilder().setTag(session.getTag()).setError(e.getMessage()).build());
             }
         }
 

@@ -23,7 +23,7 @@ message Data {
 // Tunnel allows LDAP over gRPC proxy
 service Tunnel {
   // Register is used to request new Tunnel RPC invocations.
-  rpc Register(Session) returns (stream Session);
+  rpc Register(stream Session) returns (stream Session);
 
   // Tunnel allows the tunnel client and server to create a bidirectional stream
   // in which data can be forwarded.

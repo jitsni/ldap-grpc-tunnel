@@ -58,10 +58,11 @@ public class LdapProxyGrpcServer {
     static class GrpcServerImpl extends TunnelGrpc.TunnelImplBase {
         StreamObserver<Session> registerObserver;
         Map<Integer, CompletableFuture<MyStream>> streamMap = new ConcurrentHashMap<>();
-
-        public void register(Session request, StreamObserver<Session> responseObserver) {
+        @Override
+        public StreamObserver<Session> register(StreamObserver<Session> responseObserver) {
             LOGGER.info("GrpcServerImpl::register()");
             this.registerObserver = responseObserver;
+            return new RegistrationHandler();
         }
 
         @Override
@@ -84,6 +85,23 @@ public class LdapProxyGrpcServer {
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
+        }
+    }
+
+    static class RegistrationHandler implements StreamObserver<LdapService.Session> {
+        @Override
+        public void onNext(Session value) {
+
+        }
+
+        @Override
+        public void onError(Throwable t) {
+
+        }
+
+        @Override
+        public void onCompleted() {
+
         }
     }
 
